@@ -1,0 +1,153 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include <Servo.h>
+#include <Wire.h>
+
+const uint64_t pipeIn = 0xE8E8F0F0E1LL; 
+RF24 radio(9, 10);
+const int MPU_addr=0x68;
+int16_t AcY;
+int calculation = 0;
+
+int Accelerometer_angle = 0;
+int flap_mode = 0;
+
+struct Received_data 
+{
+  byte ch1;
+  byte ch2;
+  byte ch3;
+  byte ch4;
+  byte ch5;
+};
+
+Received_data received_data;
+Servo channel_1;
+Servo channel_2;
+Servo channel_3;
+Servo channel_4;
+Servo channel_5;
+
+int ch1_value = 0;
+int ch2_value = 0;
+int ch3_value = 0;
+int ch4_value = 0;
+int ch5_value = 0;
+
+void reset_the_Data() 
+{
+  received_data.ch1 = 0;      
+  received_data.ch2 = 127;
+  received_data.ch3 = 127;
+  received_data.ch4 = 127;
+}
+
+
+void setup()
+{
+  Wire.begin();
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x6B);  
+  Wire.write(0);   
+  Wire.endTransmission(true);
+
+  Serial.begin(9600);
+  //power
+  channel_1.attach(4);
+  //Elevator
+  channel_2.attach(3);
+  //Rudder
+  channel_3.attach(2);
+  //Aileron
+  channel_4.attach(5);
+  channel_5.attach(6);
+  
+  reset_the_Data();
+
+  radio.begin();
+  radio.setAutoAck(false);
+  radio.setDataRate(RF24_250KBPS);  
+  radio.openReadingPipe(1,pipeIn);
+  radio.startListening(); 
+}
+
+
+unsigned long lastRecvTime = 0;
+void receive_the_data()
+{
+  while ( radio.available() ) 
+  {
+    radio.read(&received_data, sizeof(Received_data));
+    lastRecvTime = millis(); //Here we receive the data
+  }
+}
+
+void loop()
+{
+  Wire.beginTransmission(MPU_addr);
+  Wire.write(0x3B); 
+  Wire.endTransmission(false);
+  Wire.requestFrom(MPU_addr,14,true);  
+  AcY=Wire.read()<<8|Wire.read();
+
+  //This Brings in the value from the Accelerometer
+  Accelerometer_angle = AcY/182.04;
+
+
+  
+  receive_the_data();
+  unsigned long now = millis();
+  if ( now - lastRecvTime > 1000 )
+  {
+   reset_the_Data();
+  } 
+
+ 
+
+  //Flap mode is read from the controller and defines which mode the plane needs to be in
+  flap_mode = received_data.ch5;
+
+  //FLap mode 0 uses the Accelerometer data to adjust the ailrons
+  if (flap_mode == 0)
+  {
+    ch4_value = received_data.ch4;
+    ch5_value = received_data.ch4;
+    calculation = Accelerometer_angle+ 90;
+     
+    //This part detects if the controls are in use as the stibilty assist will only be used when the user is not controlling the roll of the plane
+    if (ch5_value < 125 && ch5_value > 118)
+    {
+    channel_4.write(calculation);
+    channel_5.write(calculation);
+    }
+    else
+    {
+    channel_4.write(ch4_value);
+    channel_5.write(ch4_value);    
+    }
+  } 
+  //Flap mode 1 locks the ailrons in the down posistion to act as flaps when the plan lands for a slow and controlled landings
+  if (flap_mode == 1)
+  {
+    channel_4.writeMicroseconds(1005);
+    channel_5.writeMicroseconds(2000); 
+  }
+  //Flap mode 2 allows the user to controller the roll with no assist from the Accelerometer
+  if (flap_mode == 2)
+  {
+    ch4_value = map(received_data.ch4,0,255,1000,2000);
+    channel_4.writeMicroseconds(ch4_value);
+    channel_5.writeMicroseconds(ch4_value);  
+  }
+
+  
+  //Here the values from the rudder, elevator and trottle are read and written to the servos
+  ch1_value = map(received_data.ch1,0,255,1000,2000);
+  ch2_value = map(received_data.ch2,255,0,1000,2000);
+  ch3_value = map(received_data.ch3,255,0,1000,2000);
+  channel_1.writeMicroseconds(ch1_value);  
+  channel_2.writeMicroseconds(ch2_value);  
+  channel_3.writeMicroseconds(ch3_value);
+
+}
