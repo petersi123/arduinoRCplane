@@ -1,0 +1,203 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+LiquidCrystal_I2C lcd(0x27,16,2);
+const uint64_t my_radio_pipe = 0xE8E8F0F0E1LL;
+RF24 radio(9, 10);
+
+
+int temp = 0;
+int flap = 0;
+float Trim = 0;
+int flap_mode = 0;
+int clearscreen = 0;
+int mode = 0;
+
+
+struct Data_to_be_sent 
+{
+  byte ch1;
+  byte ch2;
+  byte ch3;
+  byte ch4;
+  byte ch5;
+};
+Data_to_be_sent sent_data;
+
+void setup()
+{
+  Serial.begin(9600);
+  //NRF startup
+  radio.begin();
+  radio.setAutoAck(false);
+  radio.setDataRate(RF24_250KBPS);
+  radio.openWritingPipe(my_radio_pipe);
+
+
+  pinMode(3, INPUT);
+  pinMode(4, INPUT);
+  pinMode(5, INPUT);
+
+ //Motor
+  sent_data.ch1 = 127;
+ //Rudder
+  sent_data.ch2 = 127;
+ //Elevator
+  sent_data.ch3 = 127;
+ //Aileron
+  sent_data.ch4 = 127;
+
+
+  //LCD startup
+  lcd.init();          
+  lcd.backlight();
+  lcd.setCursor(0,0);
+  lcd.print("Throttle: %");
+  lcd.setCursor(0,1);
+  lcd.print("Trim: ");
+}
+
+void loop()
+{
+ //Read digital inputs on controller
+ flap = digitalRead(3);
+ int left_flap = digitalRead(4);
+ int right_flap = digitalRead(5);
+
+
+//flap is user to cycle the different modes on the controller
+ if (flap == HIGH)
+  {
+    mode = mode + 1;
+    if (mode == 3)
+    {
+      mode = 0;      
+    }
+    delay(300);
+  }
+  
+  //Mode 0 has user controller roll, trim adjustment as well as Accelerometer adjustment
+  if (mode == 0)
+  {
+    lcd.setCursor(15,0);
+    lcd.print("   ");
+    flap_mode = 0;
+    float trimprint = map(Trim, -200, 200, -100, 100);
+
+    if (clearscreen == 0)
+    {
+      lcd.setCursor(5,1);
+      lcd.print("          ");
+      clearscreen = 1;
+    }
+    lcd.setCursor(6,1);
+    lcd.print(trimprint, 0);
+    if (left_flap == HIGH)
+    {
+        lcd.setCursor(6,1);
+        lcd.print("          ");
+        Trim = Trim + 20;
+        delay(100);
+    }
+    if (right_flap == HIGH)
+    {
+        lcd.setCursor(6,1);
+        lcd.print("          ");
+        Trim = Trim - 20;
+        delay(100);
+    }
+    
+    int ch4temp = analogRead(A2);
+    if (ch4temp > 500 && ch4temp < 600)
+    {
+      int temp = ch4temp + Trim;
+      sent_data.ch4  = map(temp, 0, 1024, 0, 255);
+    }
+    else
+    {
+      sent_data.ch4  = map(ch4temp, 0, 1024, 0, 255);
+    }
+  }
+
+
+  //Mode 1 locks flaps down
+  if (mode == 1)
+  {
+        flap_mode = 1;
+        lcd.setCursor(5,1);
+        lcd.print("FLAPS DOWN");
+        clearscreen = 0;
+  }
+
+  //Mode 2 has user controller roll with trim adjustment
+  if (mode == 2)
+  {
+    flap_mode = 2;
+    float trimprint = map(Trim, -200, 200, -100, 100);
+    lcd.setCursor(15,0);
+    lcd.print("A");
+
+    if (clearscreen == 0)
+    {
+      lcd.setCursor(5,1);
+      lcd.print("          ");
+      clearscreen = 1;
+    }
+    lcd.setCursor(6,1);
+    lcd.print(trimprint, 0);
+    if (left_flap == HIGH)
+    {
+        lcd.setCursor(6,1);
+        lcd.print("          ");
+        Trim = Trim + 20;
+        delay(100);
+    }
+    if (right_flap == HIGH)
+    {
+        lcd.setCursor(6,1);
+        lcd.print("          ");
+        Trim = Trim - 20;
+        delay(100);
+    }
+    
+    int ch4temp = analogRead(A2);
+    if (ch4temp > 500 && ch4temp < 600)
+    {
+      int temp = ch4temp + Trim;
+      sent_data.ch4  = map(temp, 0, 1024, 0, 255);
+    }
+    else
+    {
+      sent_data.ch4  = map(ch4temp, 0, 1024, 0, 255);
+    }
+  }
+  
+
+  //print and adjust power (the potentiometer on my controller reads between 670-1024)
+  int power = map(analogRead(A6), 670, 1024, 0, 101);
+  lcd.setCursor(11,0);
+  lcd.print(power);
+  if (temp < (power-2) || temp > (power+2))
+  {
+    lcd.setCursor(11,0);
+    lcd.print("   ");
+    temp = power;
+  }
+  
+  //Read control sticks
+  sent_data.ch1 = map(analogRead(A6), 665, 1024, 0, 255);
+  sent_data.ch2 = map(analogRead(A3), 0, 1024, 255, 0);
+  sent_data.ch3 = map(analogRead(A1), 0, 1024, 0, 255);
+  Serial.print(sent_data.ch2);
+  Serial.print("    ");
+  Serial.print(sent_data.ch3);
+  Serial.println();
+  //send flap mode
+  sent_data.ch5 = flap_mode;
+
+
+
+  radio.write(&sent_data, sizeof(Data_to_be_sent));
+}
